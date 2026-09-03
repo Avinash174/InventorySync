@@ -1,30 +1,105 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-
 import 'package:inventorysync/main.dart';
+import 'package:inventorysync/models/inventory_item.dart';
+import 'package:inventorysync/providers/inventory_provider.dart';
+import 'package:inventorysync/services/sync_manager.dart';
+import 'package:inventorysync/widgets/inventory_item_card.dart';
+import 'package:inventorysync/widgets/sync_status.dart';
+
+import 'inventory_notifier_test.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  group('Widget Tests with Riverpod', () {
+    late FakeLocalStorageService storage;
+    late FakeSyncManager sync;
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    setUp(() {
+      storage = FakeLocalStorageService();
+      sync = FakeSyncManager();
+    });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    tearDown(() {
+      sync.dispose();
+    });
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    testWidgets('renders Inventory Sync app with status and items', (WidgetTester tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            localStorageServiceProvider.overrideWithValue(storage),
+            syncManagerProvider.overrideWithValue(sync),
+          ],
+          child: const InventorySyncApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Inventory Sync'), findsOneWidget);
+      expect(find.text('Laptop'), findsOneWidget);
+      expect(find.text('Quantity: 10'), findsOneWidget);
+      expect(find.text('Online'), findsOneWidget);
+    });
+
+    testWidgets('tapping plus button increments quantity in UI', (WidgetTester tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            localStorageServiceProvider.overrideWithValue(storage),
+            syncManagerProvider.overrideWithValue(sync),
+          ],
+          child: const InventorySyncApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final plusBtn = find.byIcon(Icons.add);
+      expect(plusBtn, findsOneWidget);
+
+      await tester.tap(plusBtn);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Quantity: 11'), findsOneWidget);
+    });
+
+    testWidgets('SyncStatusBadge displays Local Network Only and Offline states', (WidgetTester tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: SyncStatusBadge(
+              syncState: SyncState.localNetworkOnly,
+              queuedCount: 2,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Local Network Only'), findsOneWidget);
+      expect(find.text('2 queued'), findsOneWidget);
+    });
+
+    testWidgets('InventoryItemCard disables minus button when quantity is zero', (WidgetTester tester) async {
+      var decremented = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: InventoryItemCard(
+              item: const InventoryItem(id: 'item-zero', name: 'Zero Stock', quantity: 0),
+              onIncrement: () {},
+              onDecrement: () => decremented = true,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Zero Stock'), findsOneWidget);
+      expect(find.text('Quantity: 0'), findsOneWidget);
+
+      final minusBtn = tester.widget<OutlinedButton>(find.widgetWithIcon(OutlinedButton, Icons.remove));
+      expect(minusBtn.onPressed, isNull);
+      expect(decremented, isFalse);
+    });
   });
 }

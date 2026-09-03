@@ -66,5 +66,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Distributed Inventory uses local network broadcast to synchronize inventory updates with peer devices when offline.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_inventorysync._udp</string>
+	</array>
 </dict>
 </plist>

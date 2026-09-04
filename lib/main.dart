@@ -8,6 +8,8 @@ import 'services/mqtt_service.dart';
 import 'services/sync_manager.dart';
 import 'services/udp_service.dart';
 
+import 'providers/theme_provider.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -37,11 +39,13 @@ void main() async {
   );
 }
 
-class InventorySyncApp extends StatelessWidget {
+class InventorySyncApp extends ConsumerWidget {
   const InventorySyncApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final themeMode = ref.watch(themeModeProvider);
+
     return MaterialApp(
       title: 'Inventory Sync',
       debugShowCheckedModeBanner: false,
@@ -51,6 +55,10 @@ class InventorySyncApp extends StatelessWidget {
           seedColor: const Color(0xFF2563EB),
           brightness: Brightness.light,
         ),
+        appBarTheme: const AppBarTheme(
+          centerTitle: false,
+          elevation: 0,
+        ),
       ),
       darkTheme: ThemeData(
         useMaterial3: true,
@@ -58,8 +66,12 @@ class InventorySyncApp extends StatelessWidget {
           seedColor: const Color(0xFF3B82F6),
           brightness: Brightness.dark,
         ),
+        appBarTheme: const AppBarTheme(
+          centerTitle: false,
+          elevation: 0,
+        ),
       ),
-      themeMode: ThemeMode.system,
+      themeMode: themeMode,
       home: const InventoryScreen(),
     );
   }

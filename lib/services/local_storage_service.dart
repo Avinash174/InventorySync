@@ -116,4 +116,14 @@ class LocalStorageService {
   Future<void> setRoomId(String roomId) async {
     await _settingsBox?.put('room_id', roomId.trim());
   }
+
+  // --- Theme Mode ---
+
+  String getThemeMode() {
+    return _settingsBox?.get('theme_mode', defaultValue: 'system') as String? ?? 'system';
+  }
+
+  Future<void> setThemeMode(String themeMode) async {
+    await _settingsBox?.put('theme_mode', themeMode);
+  }
 }

@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:inventorysync/models/inventory_item.dart';
 import 'package:inventorysync/models/sync_message.dart';
 import 'package:inventorysync/providers/inventory_provider.dart';
+import 'package:inventorysync/providers/theme_provider.dart';
 import 'package:inventorysync/services/local_storage_service.dart';
 import 'package:inventorysync/services/mqtt_service.dart';
 import 'package:inventorysync/services/sync_manager.dart';
@@ -63,6 +65,16 @@ class FakeLocalStorageService implements LocalStorageService {
 
   @override
   Future<void> setRoomId(String roomId) async {}
+
+  String themeMode = 'system';
+
+  @override
+  String getThemeMode() => themeMode;
+
+  @override
+  Future<void> setThemeMode(String mode) async {
+    themeMode = mode;
+  }
 }
 
 class FakeSyncManager implements SyncManager {
@@ -185,6 +197,17 @@ void main() {
 
       final items = container.read(inventoryProvider);
       expect(items.first.quantity, 99);
+    });
+
+    test('theme mode notifier changes and persists theme mode', () async {
+      expect(container.read(themeModeProvider), ThemeMode.system);
+
+      await container.read(themeModeProvider.notifier).setThemeMode(ThemeMode.dark);
+      expect(container.read(themeModeProvider), ThemeMode.dark);
+      expect(storage.getThemeMode(), 'dark');
+
+      await container.read(themeModeProvider.notifier).toggleTheme();
+      expect(container.read(themeModeProvider), ThemeMode.system);
     });
   });
 }

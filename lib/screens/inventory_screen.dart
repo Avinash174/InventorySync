@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/inventory_provider.dart';
+import '../providers/theme_provider.dart';
 import '../widgets/inventory_item_card.dart';
 import '../widgets/sync_status.dart';
 
@@ -35,6 +36,7 @@ class InventoryScreen extends ConsumerWidget {
     final syncStateAsync = ref.watch(syncStateProvider);
     final syncManager = ref.watch(syncManagerProvider);
     final queuedCount = ref.watch(queuedCountProvider);
+    final themeMode = ref.watch(themeModeProvider);
 
     final currentSyncState = syncStateAsync.value ?? syncManager.currentState;
 
@@ -46,6 +48,52 @@ class InventoryScreen extends ConsumerWidget {
         ),
         elevation: 0,
         actions: [
+          PopupMenuButton<ThemeMode>(
+            icon: Icon(
+              switch (themeMode) {
+                ThemeMode.light => Icons.light_mode,
+                ThemeMode.dark => Icons.dark_mode,
+                ThemeMode.system => Icons.brightness_auto,
+              },
+            ),
+            tooltip: 'Select Theme',
+            initialValue: themeMode,
+            onSelected: (mode) {
+              ref.read(themeModeProvider.notifier).setThemeMode(mode);
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: ThemeMode.system,
+                child: Row(
+                  children: [
+                    Icon(Icons.brightness_auto, size: 20),
+                    SizedBox(width: 12),
+                    Text('System Default'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: ThemeMode.light,
+                child: Row(
+                  children: [
+                    Icon(Icons.light_mode, size: 20),
+                    SizedBox(width: 12),
+                    Text('Light Mode'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: ThemeMode.dark,
+                child: Row(
+                  children: [
+                    Icon(Icons.dark_mode, size: 20),
+                    SizedBox(width: 12),
+                    Text('Dark Mode'),
+                  ],
+                ),
+              ),
+            ],
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Reconnect & Refresh',

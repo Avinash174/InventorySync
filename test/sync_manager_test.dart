@@ -171,6 +171,16 @@ class FakeLocalStorageService implements LocalStorageService {
 
   @override
   Future<void> setRoomId(String roomId) async {}
+
+  String themeMode = 'system';
+
+  @override
+  String getThemeMode() => themeMode;
+
+  @override
+  Future<void> setThemeMode(String mode) async {
+    themeMode = mode;
+  }
 }
 
 void main() {

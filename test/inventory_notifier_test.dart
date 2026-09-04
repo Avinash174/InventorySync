@@ -81,6 +81,7 @@ class FakeSyncManager implements SyncManager {
   SyncState state = SyncState.online;
   final _stateController = StreamController<SyncState>.broadcast();
   final _updateController = StreamController<SyncMessage>.broadcast();
+  final _queueController = StreamController<int>.broadcast();
   final List<InventoryItem> sentUpdates = [];
 
   @override
@@ -91,6 +92,9 @@ class FakeSyncManager implements SyncManager {
 
   @override
   Stream<SyncMessage> get incomingUpdates => _updateController.stream;
+
+  @override
+  Stream<int> get queueCountStream => _queueController.stream;
 
   @override
   String get deviceId => 'test-device';
@@ -128,6 +132,7 @@ class FakeSyncManager implements SyncManager {
   void dispose() {
     _stateController.close();
     _updateController.close();
+    _queueController.close();
   }
 
   void emitRemoteUpdate(SyncMessage msg) {

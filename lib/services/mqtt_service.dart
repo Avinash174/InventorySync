@@ -13,6 +13,7 @@ class MqttService {
   String _deviceId = '';
   Timer? _reconnectTimer;
   bool _manuallyDisconnected = false;
+  Future<bool>? _connectingFuture;
 
   StreamSubscription? _updatesSub;
 
@@ -37,51 +38,69 @@ class MqttService {
   Future<bool> connect({bool force = false}) async {
     if (isConnected && !force) return true;
 
-    if (force) {
-      disconnect();
+    if (_connectingFuture != null && !force) {
+      return _connectingFuture!;
+    }
+
+    _connectingFuture = _performConnect(force: force);
+    try {
+      final result = await _connectingFuture!;
+      return result;
+    } finally {
+      _connectingFuture = null;
+    }
+  }
+
+  Future<bool> _performConnect({bool force = false}) async {
+    _reconnectTimer?.cancel();
+
+    if (force || _client != null) {
+      _teardownClient();
     }
 
     _manuallyDisconnected = false;
-    final clientId = 'inv_${_deviceId}_${DateTime.now().millisecondsSinceEpoch % 10000}';
+    final clientId = 'inv_${_deviceId}_${DateTime.now().millisecondsSinceEpoch}';
 
-    _client = MqttServerClient.withPort(broker, clientId, port);
-    _client!.logging(on: false);
-    _client!.keepAlivePeriod = 20;
-    _client!.autoReconnect = true;
-    _client!.resubscribeOnAutoReconnect = true;
+    final client = MqttServerClient.withPort(broker, clientId, port);
+    _client = client;
+    client.logging(on: false);
+    client.keepAlivePeriod = 20;
+    client.autoReconnect = true;
+    client.resubscribeOnAutoReconnect = true;
 
-    _client!.onConnected = () {
-      debugPrint('[MQTT] Connected to $broker on topic: $topic');
-      _connectionStateController.add(true);
+    client.onConnected = () {
+      if (_client != client) return;
+      _reconnectTimer?.cancel();
       _subscribe();
       _listenToUpdates();
-      _reconnectTimer?.cancel();
+      _connectionStateController.add(true);
     };
 
-    _client!.onDisconnected = () {
-      debugPrint('[MQTT] Disconnected');
+    client.onDisconnected = () {
+      if (_client != client) return;
       _connectionStateController.add(false);
       if (!_manuallyDisconnected) {
         _scheduleReconnect();
       }
     };
 
-    _client!.onAutoReconnected = () {
-      debugPrint('[MQTT] Auto-reconnected');
-      _connectionStateController.add(true);
+    client.onAutoReconnected = () {
+      if (_client != client) return;
+      _reconnectTimer?.cancel();
       _subscribe();
       _listenToUpdates();
+      _connectionStateController.add(true);
     };
 
     final connMessage = MqttConnectMessage()
         .withClientIdentifier(clientId)
         .startClean()
         .withWillQos(MqttQos.atLeastOnce);
-    _client!.connectionMessage = connMessage;
+    client.connectionMessage = connMessage;
 
     try {
-      final status = await _client!.connect().timeout(const Duration(seconds: 6));
-      if (status?.state == MqttConnectionState.connected) {
+      final status = await client.connect().timeout(const Duration(seconds: 6));
+      if (_client == client && status?.state == MqttConnectionState.connected) {
         _subscribe();
         _listenToUpdates();
         return true;
@@ -94,37 +113,43 @@ class MqttService {
       debugPrint('[MQTT] Connection error: $e');
     }
 
-    _scheduleReconnect();
+    if (_client == client) {
+      _scheduleReconnect();
+    }
     return false;
   }
 
   void _subscribe() {
-    if (!isConnected) return;
-    _client!.subscribe(topic, MqttQos.atLeastOnce);
+    if (!isConnected || _client == null) return;
+    try {
+      _client!.subscribe(topic, MqttQos.atLeastOnce);
+    } catch (e) {
+      debugPrint('[MQTT] Subscribe error: $e');
+    }
   }
 
   void _listenToUpdates() {
     _updatesSub?.cancel();
-    _updatesSub = _client?.updates?.listen((List<MqttReceivedMessage<MqttMessage>> messages) {
+    if (_client == null) return;
+    _updatesSub = _client!.updates?.listen((List<MqttReceivedMessage<MqttMessage>> messages) {
       for (final msg in messages) {
         final pubMsg = msg.payload as MqttPublishMessage;
         final payload =
             MqttPublishPayload.bytesToStringAsString(pubMsg.payload.message);
-        debugPrint('[MQTT] Received payload: $payload');
         _messageController.add(payload);
       }
     });
   }
 
-  bool publish(String payload) {
-    if (!isConnected) return false;
+  bool publish(String payload, {String? targetTopic}) {
+    if (!isConnected || _client == null) return false;
 
     try {
       final builder = MqttClientPayloadBuilder();
       builder.addUTF8String(payload);
-      _client!.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
-      debugPrint('[MQTT] Published: $payload');
-      return true;
+      final pubTopic = targetTopic ?? topic;
+      final result = _client!.publishMessage(pubTopic, MqttQos.atLeastOnce, builder.payload!);
+      return result > 0;
     } catch (e) {
       debugPrint('[MQTT] Publish error: $e');
       return false;
@@ -133,8 +158,10 @@ class MqttService {
 
   void updateRoom(String newRoomId) {
     if (_roomId == newRoomId) return;
-    if (isConnected) {
-      _client?.unsubscribe(topic);
+    if (isConnected && _client != null) {
+      try {
+        _client!.unsubscribe(topic);
+      } catch (_) {}
     }
     _roomId = newRoomId;
     _subscribe();
@@ -150,18 +177,30 @@ class MqttService {
     });
   }
 
+  void _teardownClient() {
+    _updatesSub?.cancel();
+    _updatesSub = null;
+    if (_client != null) {
+      _client!.onConnected = null;
+      _client!.onDisconnected = null;
+      _client!.onAutoReconnected = null;
+      try {
+        _client!.disconnect();
+      } catch (_) {}
+      _client = null;
+    }
+  }
+
   void disconnect() {
     _manuallyDisconnected = true;
     _reconnectTimer?.cancel();
-    try {
-      _client?.disconnect();
-    } catch (_) {}
+    _connectingFuture = null;
+    _teardownClient();
     _connectionStateController.add(false);
   }
 
   void dispose() {
     disconnect();
-    _updatesSub?.cancel();
     _messageController.close();
     _connectionStateController.close();
   }

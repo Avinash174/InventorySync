@@ -36,6 +36,8 @@ class SyncManager {
       StreamController<SyncState>.broadcast();
   final StreamController<SyncMessage> _incomingUpdatesController =
       StreamController<SyncMessage>.broadcast();
+  final StreamController<int> _queueCountController =
+      StreamController<int>.broadcast();
 
   SyncManager({
     required this.mqttService,
@@ -47,6 +49,7 @@ class SyncManager {
   SyncState get currentState => _currentState;
   Stream<SyncState> get stateStream => _stateController.stream;
   Stream<SyncMessage> get incomingUpdates => _incomingUpdatesController.stream;
+  Stream<int> get queueCountStream => _queueCountController.stream;
 
   String get deviceId => localStorage.getDeviceId();
   String get roomId => localStorage.getRoomId();
@@ -55,10 +58,12 @@ class SyncManager {
     mqttService.configure(deviceId: deviceId, roomId: roomId);
 
     // 1. Listen to MQTT connection state
-    _mqttStateSub = mqttService.connectionStream.listen((connected) {
-      _evaluateSyncState();
+    _mqttStateSub = mqttService.connectionStream.listen((connected) async {
+      await _evaluateSyncState();
       if (connected) {
-        _flushOfflineQueue();
+        debugPrint('[SYNC] MQTT connected');
+        debugPrint('[SYNC] Subscribed: inventory-sync/$roomId');
+        await _flushOfflineQueue();
       }
     });
 
@@ -73,16 +78,37 @@ class SyncManager {
     });
 
     // 4. Listen to network connectivity
-    _connectivitySub = connectivity.onConnectivityChanged.listen((results) {
-      _evaluateSyncState();
-      if (_hasInternetConnection(results) && !mqttService.isConnected) {
-        mqttService.connect();
+    _connectivitySub = connectivity.onConnectivityChanged.listen((results) async {
+      final isOnline = _hasInternetConnection(results);
+      if (isOnline) {
+        debugPrint('[SYNC] Connectivity: ONLINE');
+        await _evaluateSyncState();
+        if (!mqttService.isConnected) {
+          debugPrint('[SYNC] Reconnecting MQTT...');
+          final connected = await mqttService.connect();
+          if (connected) {
+            debugPrint('[SYNC] MQTT connected');
+            debugPrint('[SYNC] Subscribed: inventory-sync/$roomId');
+            await _evaluateSyncState();
+            await _flushOfflineQueue();
+          }
+        }
+      } else {
+        debugPrint('[SYNC] Connectivity: OFFLINE');
+        await _evaluateSyncState();
       }
     });
 
-    // Initial connection attempt
-    _evaluateSyncState();
-    mqttService.connect();
+    // Initial state evaluation and connection
+    await _evaluateSyncState();
+    _queueCountController.add(localStorage.getQueuedCount());
+    final initialConnected = await mqttService.connect();
+    if (initialConnected) {
+      debugPrint('[SYNC] MQTT connected');
+      debugPrint('[SYNC] Subscribed: inventory-sync/$roomId');
+      await _evaluateSyncState();
+      await _flushOfflineQueue();
+    }
   }
 
   Future<void> _evaluateSyncState() async {
@@ -109,7 +135,6 @@ class SyncManager {
         debugPrint('[SyncManager] Status changed -> ${_currentState.label}');
       }
     } catch (_) {
-      // Fallback if connectivity check fails
       if (mqttService.isConnected && _currentState != SyncState.online) {
         _currentState = SyncState.online;
         _stateController.add(_currentState);
@@ -147,6 +172,8 @@ class SyncManager {
         final published = mqttService.publish(message.toJson());
         if (!published) {
           await localStorage.queueMessage(message);
+          debugPrint('[SYNC] Queued message: ${message.messageId}');
+          _queueCountController.add(localStorage.getQueuedCount());
         }
         break;
 
@@ -155,10 +182,14 @@ class SyncManager {
         await udpService.broadcast(message.toJson());
         // Also queue for cloud reconciliation when internet returns
         await localStorage.queueMessage(message);
+        debugPrint('[SYNC] Queued message: ${message.messageId}');
+        _queueCountController.add(localStorage.getQueuedCount());
         break;
 
       case SyncState.offline:
         await localStorage.queueMessage(message);
+        debugPrint('[SYNC] Queued message: ${message.messageId}');
+        _queueCountController.add(localStorage.getQueuedCount());
         break;
     }
   }
@@ -184,7 +215,7 @@ class SyncManager {
       localStorage.saveItem(updated);
       debugPrint('[SyncManager] Processed update from $source: ${message.itemId} = ${message.quantity}');
 
-      // Notify BLoC
+      // Notify BLoC / Notifier
       _incomingUpdatesController.add(message);
     } catch (e) {
       debugPrint('[SyncManager] Error handling payload: $e');
@@ -197,25 +228,36 @@ class SyncManager {
 
     try {
       final queued = localStorage.getQueuedMessages();
+      debugPrint('[SYNC] Queue size: ${queued.length}');
       if (queued.isEmpty) {
-        _isFlushingQueue = false;
         return;
       }
 
       debugPrint('[SyncManager] Flushing ${queued.length} queued update(s)...');
       for (final msg in queued) {
-        if (!mqttService.isConnected) break;
+        if (!mqttService.isConnected) {
+          debugPrint('[SYNC] Queue publish failed: MQTT disconnected during flush');
+          break;
+        }
 
+        debugPrint('[SYNC] Publishing queued message: ${msg.messageId}');
         final sent = mqttService.publish(msg.toJson());
         if (sent) {
           await localStorage.removeQueuedMessage(msg.messageId);
+          debugPrint('[SYNC] Published successfully: ${msg.messageId}');
+          debugPrint('[SYNC] Removed from queue: ${msg.messageId}');
+          _queueCountController.add(localStorage.getQueuedCount());
         } else {
+          debugPrint('[SYNC] Queue publish failed: MQTT publish failed');
           break;
         }
       }
+      final remaining = localStorage.getQueuedCount();
+      debugPrint('[SYNC] Queue size: $remaining');
+      _queueCountController.add(remaining);
       debugPrint('[SyncManager] Offline queue flush complete');
     } catch (e) {
-      debugPrint('[SyncManager] Queue flush error: $e');
+      debugPrint('[SYNC] Queue publish failed: $e');
     } finally {
       _isFlushingQueue = false;
     }
@@ -223,7 +265,12 @@ class SyncManager {
 
   Future<SyncState> reconnect() async {
     await _evaluateSyncState();
-    await mqttService.connect(force: true);
+    debugPrint('[SYNC] Reconnecting MQTT...');
+    final connected = await mqttService.connect(force: true);
+    if (connected) {
+      debugPrint('[SYNC] MQTT connected');
+      debugPrint('[SYNC] Subscribed: inventory-sync/$roomId');
+    }
     await _evaluateSyncState();
     if (mqttService.isConnected) {
       await _flushOfflineQueue();
@@ -245,6 +292,7 @@ class SyncManager {
     _udpMsgSub?.cancel();
     _stateController.close();
     _incomingUpdatesController.close();
+    _queueCountController.close();
     mqttService.dispose();
     udpService.dispose();
   }

@@ -10,12 +10,18 @@ import 'package:inventorysync/services/udp_service.dart';
 
 class FakeConnectivity implements Connectivity {
   final _controller = StreamController<List<ConnectivityResult>>.broadcast();
+  List<ConnectivityResult> currentResults = [ConnectivityResult.wifi];
 
   @override
   Stream<List<ConnectivityResult>> get onConnectivityChanged => _controller.stream;
 
   @override
-  Future<List<ConnectivityResult>> checkConnectivity() async => [ConnectivityResult.wifi];
+  Future<List<ConnectivityResult>> checkConnectivity() async => currentResults;
+
+  void emit(List<ConnectivityResult> results) {
+    currentResults = results;
+    _controller.add(results);
+  }
 
   void dispose() {
     _controller.close();
@@ -26,6 +32,7 @@ class FakeMqttService implements MqttService {
   final _msgController = StreamController<String>.broadcast();
   final _connController = StreamController<bool>.broadcast();
   bool connected = false;
+  bool shouldFailPublish = false;
   List<String> published = [];
 
   @override
@@ -51,8 +58,8 @@ class FakeMqttService implements MqttService {
   }
 
   @override
-  bool publish(String payload) {
-    if (!connected) return false;
+  bool publish(String payload, {String? targetTopic}) {
+    if (!connected || shouldFailPublish) return false;
     published.add(payload);
     return true;
   }
@@ -267,6 +274,82 @@ void main() {
 
       // Should still be 33 because dup was ignored
       expect(storage.getItem('item-1')?.quantity, 33);
+    });
+
+    test('queues offline changes and flushes upon connectivity restoration', () async {
+      // 1. Simulate turning internet OFF
+      mqtt.disconnect();
+      connectivity.emit([ConnectivityResult.none]);
+      await Future.delayed(const Duration(milliseconds: 30));
+
+      expect(syncManager.currentState, SyncState.offline);
+
+      // 2. Make an offline inventory change: 10 -> 11
+      final item = storage.getItem('item-1')!.copyWith(quantity: 11);
+      await syncManager.sendInventoryUpdate(item);
+
+      expect(storage.getItem('item-1')?.quantity, 11);
+      expect(storage.getQueuedCount(), 1);
+      expect(mqtt.published.length, 0);
+
+      // 3. Simulate turning internet back ON
+      connectivity.emit([ConnectivityResult.wifi]);
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // 4. Verify MQTT connected and offline queue flushed
+      expect(mqtt.isConnected, isTrue);
+      expect(mqtt.published.length, 1);
+      expect(storage.getQueuedCount(), 0);
+    });
+
+    test('retains queued messages if MQTT publish fails', () async {
+      // 1. Simulate turning internet OFF
+      mqtt.disconnect();
+      connectivity.emit([ConnectivityResult.none]);
+      await Future.delayed(const Duration(milliseconds: 30));
+
+      // 2. Make an offline inventory change
+      final item = storage.getItem('item-1')!.copyWith(quantity: 15);
+      await syncManager.sendInventoryUpdate(item);
+      expect(storage.getQueuedCount(), 1);
+
+      // 3. Simulate publish failure on reconnect
+      mqtt.shouldFailPublish = true;
+      connectivity.emit([ConnectivityResult.wifi]);
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // 4. Verify message was not deleted because publish failed
+      expect(storage.getQueuedCount(), 1);
+    });
+
+    test('flushes existing queued messages upon startup connection (app restart)', () async {
+      // 1. Pre-seed queue with a message (simulating previous offline session)
+      const existingMsg = SyncMessage(
+        messageId: 'msg-offline-1',
+        deviceId: 'test-device-1',
+        itemId: 'item-1',
+        quantity: 12,
+        timestamp: 500,
+      );
+      storage.queue.add(existingMsg);
+      expect(storage.getQueuedCount(), 1);
+
+      // 2. Initialize new SyncManager (simulating app start)
+      final newSyncManager = SyncManager(
+        mqttService: mqtt,
+        udpService: udp,
+        localStorage: storage,
+        connectivity: connectivity,
+      );
+
+      await newSyncManager.init();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // 3. Verify queued message was flushed and removed
+      expect(mqtt.published.length, 1);
+      expect(storage.getQueuedCount(), 0);
+
+      newSyncManager.dispose();
     });
   });
 }

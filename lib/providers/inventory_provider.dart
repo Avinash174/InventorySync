@@ -49,6 +49,7 @@ final inventoryProvider =
 
 class InventoryNotifier extends Notifier<List<InventoryItem>> {
   StreamSubscription? _remoteUpdatesSub;
+  StreamSubscription? _queueCountSub;
 
   @override
   List<InventoryItem> build() {
@@ -62,8 +63,15 @@ class InventoryNotifier extends Notifier<List<InventoryItem>> {
       ref.read(queuedCountProvider.notifier).state = localStorage.getQueuedCount();
     });
 
+    // Listen to real-time queue count changes from SyncManager
+    _queueCountSub?.cancel();
+    _queueCountSub = syncManager.queueCountStream.listen((count) {
+      ref.read(queuedCountProvider.notifier).state = count;
+    });
+
     ref.onDispose(() {
       _remoteUpdatesSub?.cancel();
+      _queueCountSub?.cancel();
     });
 
     return localStorage.getInventoryItems();

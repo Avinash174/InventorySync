@@ -221,9 +221,14 @@ class SyncManager {
     }
   }
 
-  Future<void> reconnect() async {
+  Future<SyncState> reconnect() async {
     await _evaluateSyncState();
-    await mqttService.connect();
+    await mqttService.connect(force: true);
+    await _evaluateSyncState();
+    if (mqttService.isConnected) {
+      await _flushOfflineQueue();
+    }
+    return _currentState;
   }
 
   Future<void> updateRoom(String newRoomId) async {

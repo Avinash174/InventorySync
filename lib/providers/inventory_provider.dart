@@ -104,12 +104,13 @@ class InventoryNotifier extends Notifier<List<InventoryItem>> {
     ref.read(queuedCountProvider.notifier).state = localStorage.getQueuedCount();
   }
 
-  Future<void> refresh() async {
+  Future<SyncState> refresh() async {
     final localStorage = ref.read(localStorageServiceProvider);
     final syncManager = ref.read(syncManagerProvider);
 
+    final syncState = await syncManager.reconnect();
     state = localStorage.getInventoryItems();
     ref.read(queuedCountProvider.notifier).state = localStorage.getQueuedCount();
-    await syncManager.reconnect();
+    return syncState;
   }
 }

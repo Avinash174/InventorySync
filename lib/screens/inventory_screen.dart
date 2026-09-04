@@ -7,6 +7,28 @@ import '../widgets/sync_status.dart';
 class InventoryScreen extends ConsumerWidget {
   const InventoryScreen({super.key});
 
+  Future<void> _handleRefresh(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+
+    final syncState = await ref.read(inventoryProvider.notifier).refresh();
+    final queued = ref.read(queuedCountProvider);
+
+    if (!context.mounted) return;
+
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          queued > 0
+              ? 'Refreshed: ${syncState.label} ($queued queued)'
+              : 'Refreshed: ${syncState.label}',
+        ),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final items = ref.watch(inventoryProvider);
@@ -26,17 +48,13 @@ class InventoryScreen extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: 'Reconnect',
-            onPressed: () {
-              ref.read(inventoryProvider.notifier).refresh();
-            },
+            tooltip: 'Reconnect & Refresh',
+            onPressed: () => _handleRefresh(context, ref),
           ),
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: () async {
-          await ref.read(inventoryProvider.notifier).refresh();
-        },
+        onRefresh: () => _handleRefresh(context, ref),
         child: ListView(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           children: [
@@ -45,9 +63,7 @@ class InventoryScreen extends ConsumerWidget {
               child: SyncStatusBadge(
                 syncState: currentSyncState,
                 queuedCount: queuedCount,
-                onTap: () {
-                  ref.read(inventoryProvider.notifier).refresh();
-                },
+                onTap: () => _handleRefresh(context, ref),
               ),
             ),
             const SizedBox(height: 16),

@@ -107,7 +107,7 @@ class FakeSyncManager implements SyncManager {
   }
 
   @override
-  Future<void> reconnect() async {}
+  Future<SyncState> reconnect() async => state;
 
   @override
   Future<void> updateRoom(String newRoomId) async {}

@@ -44,7 +44,7 @@ class FakeMqttService implements MqttService {
   void configure({required String deviceId, required String roomId}) {}
 
   @override
-  Future<bool> connect() async {
+  Future<bool> connect({bool force = false}) async {
     connected = true;
     _connController.add(true);
     return true;

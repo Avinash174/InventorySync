@@ -14,6 +14,8 @@ class MqttService {
   Timer? _reconnectTimer;
   bool _manuallyDisconnected = false;
 
+  StreamSubscription? _updatesSub;
+
   final StreamController<String> _messageController =
       StreamController<String>.broadcast();
   final StreamController<bool> _connectionStateController =
@@ -32,8 +34,12 @@ class MqttService {
     _roomId = roomId;
   }
 
-  Future<bool> connect() async {
-    if (isConnected) return true;
+  Future<bool> connect({bool force = false}) async {
+    if (isConnected && !force) return true;
+
+    if (force) {
+      disconnect();
+    }
 
     _manuallyDisconnected = false;
     final clientId = 'inv_${_deviceId}_${DateTime.now().millisecondsSinceEpoch % 10000}';
@@ -48,6 +54,7 @@ class MqttService {
       debugPrint('[MQTT] Connected to $broker on topic: $topic');
       _connectionStateController.add(true);
       _subscribe();
+      _listenToUpdates();
       _reconnectTimer?.cancel();
     };
 
@@ -63,6 +70,7 @@ class MqttService {
       debugPrint('[MQTT] Auto-reconnected');
       _connectionStateController.add(true);
       _subscribe();
+      _listenToUpdates();
     };
 
     final connMessage = MqttConnectMessage()
@@ -96,7 +104,8 @@ class MqttService {
   }
 
   void _listenToUpdates() {
-    _client?.updates?.listen((List<MqttReceivedMessage<MqttMessage>> messages) {
+    _updatesSub?.cancel();
+    _updatesSub = _client?.updates?.listen((List<MqttReceivedMessage<MqttMessage>> messages) {
       for (final msg in messages) {
         final pubMsg = msg.payload as MqttPublishMessage;
         final payload =
@@ -152,6 +161,7 @@ class MqttService {
 
   void dispose() {
     disconnect();
+    _updatesSub?.cancel();
     _messageController.close();
     _connectionStateController.close();
   }

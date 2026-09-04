@@ -59,14 +59,14 @@ class SyncManager {
 
     debugPrint('[SYNC] deviceId: $deviceId');
     debugPrint('[SYNC] roomId: $roomId');
-    debugPrint('[SYNC] mqttTopic: ${mqttService.topic}');
+    debugPrint('[SYNC] topic: ${mqttService.topic}');
 
     // 1. Listen to MQTT connection state
     _mqttStateSub = mqttService.connectionStream.listen((connected) async {
       await _evaluateSyncState();
       if (connected) {
-        debugPrint('[SYNC] MQTT connected');
-        debugPrint('[SYNC] Subscribed: inventory-sync/$roomId');
+        debugPrint('[MQTT] CONNECTED');
+        debugPrint('[MQTT] SUBSCRIBED: ${mqttService.topic}');
         await _flushOfflineQueue();
       }
     });
@@ -91,8 +91,8 @@ class SyncManager {
           debugPrint('[SYNC] Reconnecting MQTT...');
           final connected = await mqttService.connect();
           if (connected) {
-            debugPrint('[SYNC] MQTT connected');
-            debugPrint('[SYNC] Subscribed: inventory-sync/$roomId');
+            debugPrint('[MQTT] CONNECTED');
+            debugPrint('[MQTT] SUBSCRIBED: ${mqttService.topic}');
             await _evaluateSyncState();
             await _flushOfflineQueue();
           }
@@ -108,8 +108,8 @@ class SyncManager {
     _queueCountController.add(localStorage.getQueuedCount());
     final initialConnected = await mqttService.connect();
     if (initialConnected) {
-      debugPrint('[SYNC] MQTT connected');
-      debugPrint('[SYNC] Subscribed: inventory-sync/$roomId');
+      debugPrint('[MQTT] CONNECTED');
+      debugPrint('[MQTT] SUBSCRIBED: ${mqttService.topic}');
       await _evaluateSyncState();
       await _flushOfflineQueue();
     }
@@ -154,12 +154,12 @@ class SyncManager {
   }
 
   Future<void> sendInventoryUpdate(InventoryItem item, {int delta = 0}) async {
-    // 1. Persist locally
-    await localStorage.saveItem(item);
-
     final prevQty = item.quantity - delta;
     final itemName = item.name.isNotEmpty ? item.name : item.id;
-    debugPrint('[SYNC][LOCAL] $itemName: $prevQty → ${item.quantity}');
+    debugPrint('[LOCAL] $itemName: $prevQty -> ${item.quantity}');
+
+    // 1. Persist locally
+    await localStorage.saveItem(item);
 
     // 2. Create sync payload
     final message = SyncMessage(
@@ -175,12 +175,17 @@ class SyncManager {
     // Prevent echoing own message
     localStorage.markMessageProcessed(message.messageId);
 
-    final opStr = delta >= 0 ? '+$delta' : '$delta';
+    debugPrint('[SYNC] Created message: ${message.messageId}');
+    debugPrint('[SYNC] deviceId: ${message.deviceId}');
+    debugPrint('[SYNC] roomId: ${message.roomId}');
+    debugPrint('[SYNC] itemId: ${message.itemId}');
 
     // 3. Route according to sync priority
     switch (_currentState) {
       case SyncState.online:
-        debugPrint('[SYNC][MQTT OUT] messageId: ${message.messageId} itemId: ${message.itemId} operation: $opStr');
+        debugPrint('[SYNC] Transport: MQTT');
+        debugPrint('[MQTT] Topic: ${mqttService.topic}');
+        debugPrint('[MQTT] PUBLISH: ${message.messageId}');
         final published = mqttService.publish(message.toJson());
         if (!published) {
           await localStorage.queueMessage(message);
@@ -190,6 +195,8 @@ class SyncManager {
         break;
 
       case SyncState.localNetworkOnly:
+        debugPrint('[SYNC] Transport: UDP');
+        debugPrint('[UDP] PUBLISH: ${message.messageId}');
         // Broadcast over local UDP
         await udpService.broadcast(message.toJson());
         // Also queue for cloud reconciliation when internet returns
@@ -199,6 +206,7 @@ class SyncManager {
         break;
 
       case SyncState.offline:
+        debugPrint('[SYNC] Transport: Offline Queue');
         await localStorage.queueMessage(message);
         debugPrint('[SYNC][QUEUE] Added message: ${message.messageId}');
         _queueCountController.add(localStorage.getQueuedCount());
@@ -206,7 +214,7 @@ class SyncManager {
     }
   }
 
-  void _handleIncomingPayload(String payload, {required String source}) {
+  Future<void> _handleIncomingPayload(String payload, {required String source}) async {
     try {
       final message = SyncMessage.fromJson(payload);
       if (!message.isValid) return;
@@ -218,8 +226,20 @@ class SyncManager {
       if (localStorage.isMessageProcessed(message.messageId)) return;
       localStorage.markMessageProcessed(message.messageId);
 
-      final opStr = message.delta >= 0 ? '+${message.delta}' : '${message.delta}';
-      debugPrint('[SYNC][MQTT IN] messageId: ${message.messageId} deviceId: ${message.deviceId} itemId: ${message.itemId} operation: $opStr');
+      if (source == 'MQTT') {
+        debugPrint('[MQTT] RECEIVED: ${message.messageId}');
+      } else {
+        debugPrint('[UDP] RECEIVED: ${message.messageId}');
+      }
+
+      final opStr = message.delta > 0
+          ? 'increment'
+          : message.delta < 0
+              ? 'decrement'
+              : 'set';
+      debugPrint('[SYNC] Incoming item: ${message.itemId}');
+      debugPrint('[SYNC] Incoming operation: $opStr');
+      debugPrint('[SYNC] Applying remote update');
 
       // Apply update locally using delta or fallback quantity
       final existing = localStorage.getItem(message.itemId);
@@ -239,11 +259,12 @@ class SyncManager {
           ? existing.copyWith(quantity: newQuantity)
           : InventoryItem(id: message.itemId, name: message.itemId, quantity: newQuantity);
 
-      localStorage.saveItem(updated);
+      // Await persistence before notifying UI to prevent race conditions
+      await localStorage.saveItem(updated);
       final itemName = updated.name.isNotEmpty ? updated.name : updated.id;
-      debugPrint('[SYNC][APPLY] $itemName: ${existing?.quantity ?? 0} → $newQuantity (via $source)');
+      debugPrint('[SYNC] $itemName: ${existing?.quantity ?? 0} -> $newQuantity');
 
-      // Notify BLoC / Notifier
+      // Notify Riverpod Notifier
       _incomingUpdatesController.add(message);
     } catch (e) {
       debugPrint('[SYNC][ERROR] Error handling payload: $e');
@@ -268,8 +289,9 @@ class SyncManager {
           break;
         }
 
-        final opStr = msg.delta >= 0 ? '+${msg.delta}' : '${msg.delta}';
-        debugPrint('[SYNC][MQTT OUT] messageId: ${msg.messageId} itemId: ${msg.itemId} operation: $opStr');
+        debugPrint('[SYNC] Transport: MQTT');
+        debugPrint('[MQTT] Topic: ${mqttService.topic}');
+        debugPrint('[MQTT] PUBLISH: ${msg.messageId}');
         final sent = mqttService.publish(msg.toJson());
         if (sent) {
           await localStorage.removeQueuedMessage(msg.messageId);
@@ -296,8 +318,8 @@ class SyncManager {
     debugPrint('[SYNC] Reconnecting MQTT...');
     final connected = await mqttService.connect(force: true);
     if (connected) {
-      debugPrint('[SYNC] MQTT connected');
-      debugPrint('[SYNC] Subscribed: inventory-sync/$roomId');
+      debugPrint('[MQTT] CONNECTED');
+      debugPrint('[MQTT] SUBSCRIBED: ${mqttService.topic}');
     }
     await _evaluateSyncState();
     if (mqttService.isConnected) {

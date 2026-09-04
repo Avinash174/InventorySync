@@ -27,6 +27,11 @@ class SyncMessage extends Equatable {
       timestamp > 0;
 
   Map<String, dynamic> toMap() {
+    final op = delta > 0
+        ? 'increment'
+        : delta < 0
+            ? 'decrement'
+            : 'set';
     return {
       'messageId': messageId,
       'deviceId': deviceId,
@@ -35,15 +40,28 @@ class SyncMessage extends Equatable {
       'quantity': quantity,
       'timestamp': timestamp,
       'roomId': roomId,
+      'operation': op,
+      'amount': delta.abs(),
     };
   }
 
   factory SyncMessage.fromMap(Map<dynamic, dynamic> map) {
+    int parsedDelta = (map['delta'] as num?)?.toInt() ?? 0;
+    if (parsedDelta == 0 && map.containsKey('operation')) {
+      final op = map['operation'] as String?;
+      final amount = (map['amount'] as num?)?.toInt() ?? 1;
+      if (op == 'increment') {
+        parsedDelta = amount;
+      } else if (op == 'decrement') {
+        parsedDelta = -amount;
+      }
+    }
+
     return SyncMessage(
       messageId: map['messageId'] as String? ?? '',
       deviceId: map['deviceId'] as String? ?? '',
       itemId: map['itemId'] as String? ?? '',
-      delta: (map['delta'] as num?)?.toInt() ?? 0,
+      delta: parsedDelta,
       quantity: (map['quantity'] as num?)?.toInt() ?? 0,
       timestamp: (map['timestamp'] as num?)?.toInt() ?? 0,
       roomId: map['roomId'] as String? ?? 'warehouse-main',

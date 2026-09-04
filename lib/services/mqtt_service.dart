@@ -82,6 +82,7 @@ class MqttService {
     client.onConnected = () {
       if (_client != client) return;
       _reconnectTimer?.cancel();
+      debugPrint('[MQTT] CONNECTED');
       _subscribe();
       _connectionStateController.add(true);
     };
@@ -97,6 +98,7 @@ class MqttService {
     client.onAutoReconnected = () {
       if (_client != client) return;
       _reconnectTimer?.cancel();
+      debugPrint('[MQTT] CONNECTED');
       _subscribe();
       _connectionStateController.add(true);
     };
@@ -110,6 +112,7 @@ class MqttService {
     try {
       final status = await client.connect().timeout(const Duration(seconds: 6));
       if (_client == client && status?.state == MqttConnectionState.connected) {
+        debugPrint('[MQTT] CONNECTED');
         _subscribe();
         return true;
       }
@@ -131,7 +134,7 @@ class MqttService {
     if (!isConnected || _client == null) return;
     try {
       _client!.subscribe(topic, MqttQos.atLeastOnce);
-      debugPrint('[MQTT] Subscribed: $topic');
+      debugPrint('[MQTT] SUBSCRIBED: $topic');
     } catch (e) {
       debugPrint('[MQTT] Subscribe error: $e');
     }
@@ -145,7 +148,7 @@ class MqttService {
       builder.addUTF8String(payload);
       final pubTopic = targetTopic ?? topic;
       final result = _client!.publishMessage(pubTopic, MqttQos.atLeastOnce, builder.payload!);
-      return result > 0;
+      return result >= 0;
     } catch (e) {
       debugPrint('[MQTT] Publish error: $e');
       return false;

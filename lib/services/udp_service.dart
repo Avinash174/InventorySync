@@ -22,11 +22,20 @@ class UdpService {
     if (_isRunning && _socket != null) return true;
 
     try {
-      _socket = await RawDatagramSocket.bind(
-        InternetAddress.anyIPv4,
-        port,
-        reuseAddress: true,
-      );
+      try {
+        _socket = await RawDatagramSocket.bind(
+          InternetAddress.anyIPv4,
+          port,
+          reuseAddress: true,
+          reusePort: true,
+        );
+      } catch (_) {
+        _socket = await RawDatagramSocket.bind(
+          InternetAddress.anyIPv4,
+          port,
+          reuseAddress: true,
+        );
+      }
       _socket!.broadcastEnabled = true;
       _isRunning = true;
 
@@ -38,7 +47,6 @@ class UdpService {
           if (datagram != null) {
             try {
               final text = utf8.decode(datagram.data);
-              debugPrint('[UDP] Received datagram: $text');
               _messageController.add(text);
             } catch (e) {
               debugPrint('[UDP] Packet decode error: $e');

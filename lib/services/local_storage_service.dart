@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:uuid/uuid.dart';
 import '../models/inventory_item.dart';
@@ -66,6 +67,9 @@ class LocalStorageService {
   Future<void> saveItem(InventoryItem item) async {
     if (_inventoryBox == null) return;
     await _inventoryBox!.put(item.id, item.toMap());
+    final itemName = item.name.isNotEmpty ? item.name : item.id;
+    // ignore: avoid_print
+    debugPrint('[HIVE] $itemName saved: ${item.quantity}');
   }
 
   // --- Offline Queue ---

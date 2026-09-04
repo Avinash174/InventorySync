@@ -68,11 +68,21 @@ class MqttService {
     client.autoReconnect = true;
     client.resubscribeOnAutoReconnect = true;
 
+    // Attach updates listener once per client instance
+    _updatesSub?.cancel();
+    _updatesSub = client.updates?.listen((List<MqttReceivedMessage<MqttMessage>> messages) {
+      for (final msg in messages) {
+        final pubMsg = msg.payload as MqttPublishMessage;
+        final payload =
+            MqttPublishPayload.bytesToStringAsString(pubMsg.payload.message);
+        _messageController.add(payload);
+      }
+    });
+
     client.onConnected = () {
       if (_client != client) return;
       _reconnectTimer?.cancel();
       _subscribe();
-      _listenToUpdates();
       _connectionStateController.add(true);
     };
 
@@ -88,7 +98,6 @@ class MqttService {
       if (_client != client) return;
       _reconnectTimer?.cancel();
       _subscribe();
-      _listenToUpdates();
       _connectionStateController.add(true);
     };
 
@@ -102,7 +111,6 @@ class MqttService {
       final status = await client.connect().timeout(const Duration(seconds: 6));
       if (_client == client && status?.state == MqttConnectionState.connected) {
         _subscribe();
-        _listenToUpdates();
         return true;
       }
     } on SocketException catch (e) {
@@ -123,22 +131,10 @@ class MqttService {
     if (!isConnected || _client == null) return;
     try {
       _client!.subscribe(topic, MqttQos.atLeastOnce);
+      debugPrint('[MQTT] Subscribed: $topic');
     } catch (e) {
       debugPrint('[MQTT] Subscribe error: $e');
     }
-  }
-
-  void _listenToUpdates() {
-    _updatesSub?.cancel();
-    if (_client == null) return;
-    _updatesSub = _client!.updates?.listen((List<MqttReceivedMessage<MqttMessage>> messages) {
-      for (final msg in messages) {
-        final pubMsg = msg.payload as MqttPublishMessage;
-        final payload =
-            MqttPublishPayload.bytesToStringAsString(pubMsg.payload.message);
-        _messageController.add(payload);
-      }
-    });
   }
 
   bool publish(String payload, {String? targetTopic}) {

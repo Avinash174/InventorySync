@@ -136,7 +136,11 @@ class FakeLocalStorageService implements LocalStorageService {
   Future<void> init() async {}
 
   @override
-  List<InventoryItem> getInventoryItems() => items.values.toList();
+  List<InventoryItem> getInventoryItems() {
+    final list = items.values.toList();
+    list.sort((a, b) => a.id.compareTo(b.id));
+    return list;
+  }
 
   @override
   InventoryItem? getItem(String id) => items[id];
@@ -226,6 +230,7 @@ void main() {
         messageId: 'msg-self',
         deviceId: 'test-device-1', // same device
         itemId: 'item-1',
+        delta: 1,
         quantity: 50,
         timestamp: 1000,
       );
@@ -236,11 +241,12 @@ void main() {
       expect(storage.getItem('item-1')?.quantity, 10); // unchanged
     });
 
-    test('applies valid peer update and marks processed', () async {
+    test('applies valid peer update with delta and marks processed', () async {
       const msg = SyncMessage(
         messageId: 'msg-peer-1',
         deviceId: 'test-device-2', // other device
         itemId: 'item-1',
+        delta: 4,
         quantity: 14,
         timestamp: 1000,
       );
@@ -248,6 +254,7 @@ void main() {
       mqtt.simulateIncoming(msg.toJson());
       await Future.delayed(const Duration(milliseconds: 30));
 
+      // 10 + 4 = 14
       expect(storage.getItem('item-1')?.quantity, 14);
       expect(storage.isMessageProcessed('msg-peer-1'), isTrue);
     });
@@ -257,13 +264,14 @@ void main() {
         messageId: 'msg-dup-1',
         deviceId: 'test-device-2',
         itemId: 'item-1',
-        quantity: 22,
+        delta: 2,
+        quantity: 12,
         timestamp: 1000,
       );
 
       mqtt.simulateIncoming(msg.toJson());
       await Future.delayed(const Duration(milliseconds: 30));
-      expect(storage.getItem('item-1')?.quantity, 22);
+      expect(storage.getItem('item-1')?.quantity, 12);
 
       // Modify local item directly
       storage.items['item-1'] = storage.items['item-1']!.copyWith(quantity: 33);
@@ -284,9 +292,9 @@ void main() {
 
       expect(syncManager.currentState, SyncState.offline);
 
-      // 2. Make an offline inventory change: 10 -> 11
+      // 2. Make an offline inventory change: 10 -> 11 (delta +1)
       final item = storage.getItem('item-1')!.copyWith(quantity: 11);
-      await syncManager.sendInventoryUpdate(item);
+      await syncManager.sendInventoryUpdate(item, delta: 1);
 
       expect(storage.getItem('item-1')?.quantity, 11);
       expect(storage.getQueuedCount(), 1);
@@ -310,7 +318,7 @@ void main() {
 
       // 2. Make an offline inventory change
       final item = storage.getItem('item-1')!.copyWith(quantity: 15);
-      await syncManager.sendInventoryUpdate(item);
+      await syncManager.sendInventoryUpdate(item, delta: 5);
       expect(storage.getQueuedCount(), 1);
 
       // 3. Simulate publish failure on reconnect
@@ -328,6 +336,7 @@ void main() {
         messageId: 'msg-offline-1',
         deviceId: 'test-device-1',
         itemId: 'item-1',
+        delta: 2,
         quantity: 12,
         timestamp: 500,
       );
@@ -350,6 +359,46 @@ void main() {
       expect(storage.getQueuedCount(), 0);
 
       newSyncManager.dispose();
+    });
+
+    test('reconciliation of concurrent offline/online edits converges correctly', () async {
+      // Start with item-3: Mouse = 6
+      storage.items['item-3'] = const InventoryItem(id: 'item-3', name: 'Mouse', quantity: 6);
+
+      // Device A is offline and increments Mouse: 6 + 1 = 7 (delta: +1)
+      mqtt.disconnect();
+      connectivity.emit([ConnectivityResult.none]);
+      await Future.delayed(const Duration(milliseconds: 30));
+
+      final itemA = storage.getItem('item-3')!.copyWith(quantity: 7);
+      await syncManager.sendInventoryUpdate(itemA, delta: 1);
+      expect(storage.getItem('item-3')?.quantity, 7);
+
+      // Meanwhile Device B (simulated incoming) performed Mouse +1 (delta: +1)
+      // When Device A receives Device B's change:
+      const msgFromB = SyncMessage(
+        messageId: 'msg-b-1',
+        deviceId: 'test-device-2',
+        itemId: 'item-3',
+        delta: 1,
+        quantity: 7,
+        timestamp: 1001,
+      );
+      mqtt.simulateIncoming(msgFromB.toJson());
+      await Future.delayed(const Duration(milliseconds: 30));
+
+      // Device A applies Device B's delta (+1): 7 + 1 = 8
+      expect(storage.getItem('item-3')?.quantity, 8);
+
+      // Now Device A reconnects and flushes its offline queued update (delta: +1)
+      connectivity.emit([ConnectivityResult.wifi]);
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      expect(storage.getQueuedCount(), 0);
+      expect(mqtt.published.length, 1);
+      final publishedMsg = SyncMessage.fromJson(mqtt.published.first);
+      expect(publishedMsg.delta, 1);
+      expect(publishedMsg.itemId, 'item-3');
     });
   });
 }

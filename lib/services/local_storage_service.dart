@@ -12,7 +12,7 @@ class LocalStorageService {
   Box? _queueBox;
   Box? _settingsBox;
 
-  // In-memory cache of recent message IDs to prevent duplicates
+  // In-memory & persisted cache of recent message IDs to prevent duplicates
   final Set<String> _processedMessageIds = {};
 
   Future<void> init() async {
@@ -20,7 +20,15 @@ class LocalStorageService {
     _queueBox = await Hive.openBox(_queueBoxName);
     _settingsBox = await Hive.openBox(_settingsBoxName);
 
+    _loadProcessedMessageIds();
     await _seedInitialItems();
+  }
+
+  void _loadProcessedMessageIds() {
+    final list = _settingsBox?.get('processed_message_ids') as List<dynamic>?;
+    if (list != null) {
+      _processedMessageIds.addAll(list.cast<String>());
+    }
   }
 
   Future<void> _seedInitialItems() async {
@@ -41,9 +49,11 @@ class LocalStorageService {
 
   List<InventoryItem> getInventoryItems() {
     if (_inventoryBox == null) return [];
-    return _inventoryBox!.values
+    final items = _inventoryBox!.values
         .map((e) => InventoryItem.fromMap(Map<dynamic, dynamic>.from(e as Map)))
         .toList();
+    items.sort((a, b) => a.id.compareTo(b.id));
+    return items;
   }
 
   InventoryItem? getItem(String id) {
@@ -95,6 +105,7 @@ class LocalStorageService {
     if (_processedMessageIds.length > 500) {
       _processedMessageIds.remove(_processedMessageIds.first);
     }
+    _settingsBox?.put('processed_message_ids', _processedMessageIds.toList());
   }
 
   // --- Device ID & Room ID ---

@@ -118,7 +118,7 @@ class FakeSyncManager implements SyncManager {
   Future<void> init() async {}
 
   @override
-  Future<void> sendInventoryUpdate(InventoryItem item) async {
+  Future<void> sendInventoryUpdate(InventoryItem item, {int delta = 0}) async {
     sentUpdates.add(item);
   }
 

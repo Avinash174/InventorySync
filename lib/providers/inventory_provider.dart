@@ -89,7 +89,7 @@ class InventoryNotifier extends Notifier<List<InventoryItem>> {
     final updated = item.copyWith(quantity: item.quantity + 1);
     state = state.map((e) => e.id == itemId ? updated : e).toList();
 
-    await syncManager.sendInventoryUpdate(updated);
+    await syncManager.sendInventoryUpdate(updated, delta: 1);
     ref.read(queuedCountProvider.notifier).state = localStorage.getQueuedCount();
   }
 
@@ -108,7 +108,7 @@ class InventoryNotifier extends Notifier<List<InventoryItem>> {
     final updated = item.copyWith(quantity: item.quantity - 1);
     state = state.map((e) => e.id == itemId ? updated : e).toList();
 
-    await syncManager.sendInventoryUpdate(updated);
+    await syncManager.sendInventoryUpdate(updated, delta: -1);
     ref.read(queuedCountProvider.notifier).state = localStorage.getQueuedCount();
   }
 

@@ -57,6 +57,10 @@ class SyncManager {
   Future<void> init() async {
     mqttService.configure(deviceId: deviceId, roomId: roomId);
 
+    debugPrint('[SYNC] deviceId: $deviceId');
+    debugPrint('[SYNC] roomId: $roomId');
+    debugPrint('[SYNC] mqttTopic: ${mqttService.topic}');
+
     // 1. Listen to MQTT connection state
     _mqttStateSub = mqttService.connectionStream.listen((connected) async {
       await _evaluateSyncState();
@@ -149,15 +153,20 @@ class SyncManager {
         r == ConnectivityResult.ethernet);
   }
 
-  Future<void> sendInventoryUpdate(InventoryItem item) async {
+  Future<void> sendInventoryUpdate(InventoryItem item, {int delta = 0}) async {
     // 1. Persist locally
     await localStorage.saveItem(item);
+
+    final prevQty = item.quantity - delta;
+    final itemName = item.name.isNotEmpty ? item.name : item.id;
+    debugPrint('[SYNC][LOCAL] $itemName: $prevQty → ${item.quantity}');
 
     // 2. Create sync payload
     final message = SyncMessage(
       messageId: const Uuid().v4(),
       deviceId: deviceId,
       itemId: item.id,
+      delta: delta,
       quantity: item.quantity,
       timestamp: DateTime.now().millisecondsSinceEpoch,
       roomId: roomId,
@@ -166,13 +175,16 @@ class SyncManager {
     // Prevent echoing own message
     localStorage.markMessageProcessed(message.messageId);
 
+    final opStr = delta >= 0 ? '+$delta' : '$delta';
+
     // 3. Route according to sync priority
     switch (_currentState) {
       case SyncState.online:
+        debugPrint('[SYNC][MQTT OUT] messageId: ${message.messageId} itemId: ${message.itemId} operation: $opStr');
         final published = mqttService.publish(message.toJson());
         if (!published) {
           await localStorage.queueMessage(message);
-          debugPrint('[SYNC] Queued message: ${message.messageId}');
+          debugPrint('[SYNC][QUEUE] Added message: ${message.messageId}');
           _queueCountController.add(localStorage.getQueuedCount());
         }
         break;
@@ -182,13 +194,13 @@ class SyncManager {
         await udpService.broadcast(message.toJson());
         // Also queue for cloud reconciliation when internet returns
         await localStorage.queueMessage(message);
-        debugPrint('[SYNC] Queued message: ${message.messageId}');
+        debugPrint('[SYNC][QUEUE] Added message: ${message.messageId}');
         _queueCountController.add(localStorage.getQueuedCount());
         break;
 
       case SyncState.offline:
         await localStorage.queueMessage(message);
-        debugPrint('[SYNC] Queued message: ${message.messageId}');
+        debugPrint('[SYNC][QUEUE] Added message: ${message.messageId}');
         _queueCountController.add(localStorage.getQueuedCount());
         break;
     }
@@ -206,19 +218,35 @@ class SyncManager {
       if (localStorage.isMessageProcessed(message.messageId)) return;
       localStorage.markMessageProcessed(message.messageId);
 
-      // Apply update locally
+      final opStr = message.delta >= 0 ? '+${message.delta}' : '${message.delta}';
+      debugPrint('[SYNC][MQTT IN] messageId: ${message.messageId} deviceId: ${message.deviceId} itemId: ${message.itemId} operation: $opStr');
+
+      // Apply update locally using delta or fallback quantity
       final existing = localStorage.getItem(message.itemId);
+      final int newQuantity;
+      if (existing != null) {
+        if (message.delta != 0) {
+          final computed = existing.quantity + message.delta;
+          newQuantity = computed < 0 ? 0 : computed;
+        } else {
+          newQuantity = message.quantity;
+        }
+      } else {
+        newQuantity = message.quantity;
+      }
+
       final updated = existing != null
-          ? existing.copyWith(quantity: message.quantity)
-          : InventoryItem(id: message.itemId, name: message.itemId, quantity: message.quantity);
+          ? existing.copyWith(quantity: newQuantity)
+          : InventoryItem(id: message.itemId, name: message.itemId, quantity: newQuantity);
 
       localStorage.saveItem(updated);
-      debugPrint('[SyncManager] Processed update from $source: ${message.itemId} = ${message.quantity}');
+      final itemName = updated.name.isNotEmpty ? updated.name : updated.id;
+      debugPrint('[SYNC][APPLY] $itemName: ${existing?.quantity ?? 0} → $newQuantity (via $source)');
 
       // Notify BLoC / Notifier
       _incomingUpdatesController.add(message);
     } catch (e) {
-      debugPrint('[SyncManager] Error handling payload: $e');
+      debugPrint('[SYNC][ERROR] Error handling payload: $e');
     }
   }
 
@@ -236,19 +264,19 @@ class SyncManager {
       debugPrint('[SyncManager] Flushing ${queued.length} queued update(s)...');
       for (final msg in queued) {
         if (!mqttService.isConnected) {
-          debugPrint('[SYNC] Queue publish failed: MQTT disconnected during flush');
+          debugPrint('[SYNC][ERROR] MQTT disconnected during flush');
           break;
         }
 
-        debugPrint('[SYNC] Publishing queued message: ${msg.messageId}');
+        final opStr = msg.delta >= 0 ? '+${msg.delta}' : '${msg.delta}';
+        debugPrint('[SYNC][MQTT OUT] messageId: ${msg.messageId} itemId: ${msg.itemId} operation: $opStr');
         final sent = mqttService.publish(msg.toJson());
         if (sent) {
           await localStorage.removeQueuedMessage(msg.messageId);
-          debugPrint('[SYNC] Published successfully: ${msg.messageId}');
-          debugPrint('[SYNC] Removed from queue: ${msg.messageId}');
+          debugPrint('[SYNC][QUEUE] Removed: ${msg.messageId}');
           _queueCountController.add(localStorage.getQueuedCount());
         } else {
-          debugPrint('[SYNC] Queue publish failed: MQTT publish failed');
+          debugPrint('[SYNC][ERROR] Failed to publish message: ${msg.messageId}');
           break;
         }
       }
@@ -257,7 +285,7 @@ class SyncManager {
       _queueCountController.add(remaining);
       debugPrint('[SyncManager] Offline queue flush complete');
     } catch (e) {
-      debugPrint('[SYNC] Queue publish failed: $e');
+      debugPrint('[SYNC][ERROR] Queue flush error: $e');
     } finally {
       _isFlushingQueue = false;
     }
